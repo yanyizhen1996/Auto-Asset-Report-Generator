@@ -10,10 +10,10 @@ cleaned outputs of Step 2.
 Each report contains:
   * A header band (repeated on every page) with the building's basic info and a
     plan-view placeholder box.
-  * A wall-results section with two tables (strain metrics + damage categories),
-    one row per wall. When a building has too many walls to fit on one page the
-    tables automatically continue on the next page(s); the charts then follow on
-    a fresh page.
+  * A wall-results section with three tables (CIAR1 strain metrics, CIAR2 strain
+    metrics + damage categories), one row per wall. When a building has too many
+    walls to fit on one page the tables automatically continue on the next
+    page(s); the charts then follow on a fresh page.
   * A charts page with the Building Damage Interaction charts (Boscardin &
     Cording 1989 and Son & Cording 2005) and a displacement profile
     (chainage vs. dz) for the most critical wall across construction phases.
@@ -98,7 +98,8 @@ INFO_ROW_HEIGHT = 18     # each row of the header info table
 # =============================================================================
 
 # Default folders / files (resolved next to this script).
-DEFAULT_CLEANED_DIRNAME = "Processed XDISP Output"          # Step 2 output
+DEFAULT_CLEANED_DIRNAME = "CIAR2 Processed XDISP Output"     # Step 2 output (CIAR2)
+DEFAULT_CIAR1_CLEANED_DIRNAME = "CIAR1 Processed XDISP Output"  # Step 2 output (CIAR1)
 DEFAULT_SUMMARY_FILENAME = "Building Inputs Summary.csv"
 DEFAULT_OUTPUT_DIRNAME = "Report"                   # created by this script
 
@@ -586,7 +587,8 @@ def _damage_table(walls, metrics):
 
 
 def build_building_report(out_path, info, walls, metrics, settlement,
-                          interaction_img, displacement_img):
+                          interaction_img, displacement_img,
+                          ciar1_walls, ciar1_metrics, ciar1_settlement):
     """Assemble and write one building's PDF report."""
     doc = SimpleDocTemplate(
         out_path, pagesize=letter,
@@ -595,9 +597,14 @@ def build_building_report(out_path, info, walls, metrics, settlement,
     )
 
     story = [
-        Paragraph("Wall Damage Assessment Results", _HEADING),
+        # CIAR1 strain table (same layout as CIAR2, computed from the CIAR1 folder).
+        Paragraph("Wall Damage Assessment Results CIAR1", _HEADING),
+        _strain_table(ciar1_walls, ciar1_metrics, ciar1_settlement),
+        Spacer(1, 20),
+        Paragraph("Wall Damage Assessment Results CIAR2", _HEADING),
         _strain_table(walls, metrics, settlement),
         Spacer(1, 20),
+        Paragraph("Damage Category Evaluation", _HEADING),
         _damage_table(walls, metrics),
         PageBreak(),
         Paragraph("Building Damage Interaction Charts", _HEADING),
@@ -636,7 +643,7 @@ def _pick_critical_wall(wall_metrics, walls):
     return best_wall
 
 
-def process_all(cleaned_dir, summary_path, output_dir):
+def process_all(cleaned_dir, summary_path, output_dir, ciar1_dir):
     """Generate a report for every building found in the cleaned data."""
     data_dir = os.path.join(cleaned_dir, DATA_SUBDIR)
     lines_dir = os.path.join(cleaned_dir, LINES_SUBDIR)
@@ -648,6 +655,18 @@ def process_all(cleaned_dir, summary_path, output_dir):
     phase_lines = load_phase_lines(lines_dir)   # selected phases for the disp. chart
     building_info, wall_length = load_summary(summary_path)
 
+    # CIAR1 uses the same aggregation logic, only a different source folder.
+    ciar1_results = {}
+    ciar1_settlement = {}
+    ciar1_data_dir = os.path.join(ciar1_dir, DATA_SUBDIR)
+    if os.path.isdir(ciar1_data_dir):
+        ciar1_df, _ = load_data_tables(ciar1_data_dir)
+        ciar1_results = aggregate_walls(ciar1_df)
+        ciar1_settlement = load_settlement(os.path.join(ciar1_dir, LINES_SUBDIR))
+    else:
+        print(f"WARNING: CIAR1 data folder not found - CIAR1 table will be empty: "
+              f"{ciar1_data_dir}")
+
     os.makedirs(output_dir, exist_ok=True)
     print(f"Found {len(results)} building(s). Phases evaluated: {n_phases}\n")
 
@@ -655,6 +674,10 @@ def process_all(cleaned_dir, summary_path, output_dir):
         try:
             walls = sorted(wall_metrics.keys(), key=wall_sort_key)
             wall_colors = _wall_color_map(walls)
+
+            # Matching CIAR1 walls/metrics for this building (may be absent).
+            ciar1_wall_metrics = ciar1_results.get(building, {})
+            ciar1_walls = sorted(ciar1_wall_metrics.keys(), key=wall_sort_key)
 
             # Header info (geometry from the building summary).
             height, base, eg = building_info.get(building, (np.nan, np.nan, np.nan))
@@ -686,7 +709,8 @@ def process_all(cleaned_dir, summary_path, output_dir):
             safe_name = re.sub(r'[\\/:*?"<>|]', "_", building)
             out_path = os.path.join(output_dir, f"{safe_name}.pdf")
             build_building_report(out_path, info, walls, wall_metrics, settlement,
-                                  interaction_img, displacement_img)
+                                  interaction_img, displacement_img,
+                                  ciar1_walls, ciar1_wall_metrics, ciar1_settlement)
             print(f"  report: {safe_name}.pdf  ({len(walls)} walls)")
         except Exception:
             print(f"  ERROR building report for: {building}")
@@ -707,43 +731,58 @@ class ReportGUI:
         self.root.resizable(False, False)
 
         base = script_dir()
+        self.ciar1_var = tk.StringVar(value=os.path.join(base, DEFAULT_CIAR1_CLEANED_DIRNAME))
         self.cleaned_var = tk.StringVar(value=os.path.join(base, DEFAULT_CLEANED_DIRNAME))
         self.summary_var = tk.StringVar(value=os.path.join(base, DEFAULT_SUMMARY_FILENAME))
         self.output_var = tk.StringVar(value=os.path.join(base, DEFAULT_OUTPUT_DIRNAME))
 
         pad = {"padx": 8, "pady": 6}
 
-        tk.Label(root, text="Cleaned output folder (Step 2, contains data/ & lines/):").grid(
+        tk.Label(root, text="CIAR1 cleaned output folder (Step 2, contains data/ & lines/):").grid(
             row=0, column=0, columnspan=2, sticky="w", **pad)
-        tk.Entry(root, textvariable=self.cleaned_var, width=64).grid(
+        tk.Entry(root, textvariable=self.ciar1_var, width=64).grid(
             row=1, column=0, sticky="we", **pad)
-        tk.Button(root, text="Browse...", command=self._browse_cleaned).grid(
+        tk.Button(root, text="Browse...", command=self._browse_ciar1).grid(
             row=1, column=1, **pad)
 
-        tk.Label(root, text="Building Inputs Summary.csv:").grid(
+        tk.Label(root, text="CIAR2 cleaned output folder (Step 2, contains data/ & lines/):").grid(
             row=2, column=0, columnspan=2, sticky="w", **pad)
-        tk.Entry(root, textvariable=self.summary_var, width=64).grid(
+        tk.Entry(root, textvariable=self.cleaned_var, width=64).grid(
             row=3, column=0, sticky="we", **pad)
-        tk.Button(root, text="Browse...", command=self._browse_summary).grid(
+        tk.Button(root, text="Browse...", command=self._browse_cleaned).grid(
             row=3, column=1, **pad)
 
-        tk.Label(root, text="Output folder (reports):").grid(
+        tk.Label(root, text="Building Inputs Summary.csv:").grid(
             row=4, column=0, columnspan=2, sticky="w", **pad)
-        tk.Entry(root, textvariable=self.output_var, width=64).grid(
+        tk.Entry(root, textvariable=self.summary_var, width=64).grid(
             row=5, column=0, sticky="we", **pad)
-        tk.Button(root, text="Browse...", command=self._browse_output).grid(
+        tk.Button(root, text="Browse...", command=self._browse_summary).grid(
             row=5, column=1, **pad)
 
+        tk.Label(root, text="Output folder (reports):").grid(
+            row=6, column=0, columnspan=2, sticky="w", **pad)
+        tk.Entry(root, textvariable=self.output_var, width=64).grid(
+            row=7, column=0, sticky="we", **pad)
+        tk.Button(root, text="Browse...", command=self._browse_output).grid(
+            row=7, column=1, **pad)
+
         button_frame = tk.Frame(root)
-        button_frame.grid(row=6, column=0, columnspan=2, sticky="e", **pad)
+        button_frame.grid(row=8, column=0, columnspan=2, sticky="e", **pad)
         tk.Button(button_frame, text="Generate", width=12, command=self._run).pack(
             side="left", padx=4)
         tk.Button(button_frame, text="Quit", width=8, command=root.destroy).pack(
             side="left", padx=4)
 
+    def _browse_ciar1(self):
+        folder = filedialog.askdirectory(
+            title="Select the Step 2 CIAR1 cleaned_output folder",
+            initialdir=self.ciar1_var.get() or script_dir())
+        if folder:
+            self.ciar1_var.set(folder)
+
     def _browse_cleaned(self):
         folder = filedialog.askdirectory(
-            title="Select the Step 2 cleaned_output folder",
+            title="Select the Step 2 CIAR2 cleaned_output folder",
             initialdir=self.cleaned_var.get() or script_dir())
         if folder:
             self.cleaned_var.set(folder)
@@ -764,12 +803,16 @@ class ReportGUI:
             self.output_var.set(folder)
 
     def _run(self):
+        ciar1_dir = self.ciar1_var.get().strip()
         cleaned_dir = self.cleaned_var.get().strip()
         summary_path = self.summary_var.get().strip()
         output_dir = self.output_var.get().strip()
 
         if not os.path.isdir(os.path.join(cleaned_dir, DATA_SUBDIR)):
-            messagebox.showerror("Step 3", "The cleaned folder must contain a 'data' sub-folder.")
+            messagebox.showerror("Step 3", "The CIAR2 cleaned folder must contain a 'data' sub-folder.")
+            return
+        if not os.path.isdir(os.path.join(ciar1_dir, DATA_SUBDIR)):
+            messagebox.showerror("Step 3", "The CIAR1 cleaned folder must contain a 'data' sub-folder.")
             return
         if not os.path.isfile(summary_path):
             messagebox.showerror("Step 3", "Please select a valid Building Inputs Summary.csv.")
@@ -779,13 +822,14 @@ class ReportGUI:
             self.output_var.set(output_dir)
         os.makedirs(output_dir, exist_ok=True)
 
-        print(f"Cleaned folder : {cleaned_dir}")
+        print(f"CIAR1 folder   : {ciar1_dir}")
+        print(f"CIAR2 folder   : {cleaned_dir}")
         print(f"Summary file   : {summary_path}")
         print(f"Output folder  : {output_dir}\n")
 
         start_time = time.time()
         try:
-            process_all(cleaned_dir, summary_path, output_dir)
+            process_all(cleaned_dir, summary_path, output_dir, ciar1_dir)
         except Exception:
             traceback.print_exc()
             messagebox.showerror("Step 3", "An error occurred - see the console for details.")
