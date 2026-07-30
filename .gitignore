@@ -1,0 +1,10 @@
+# Ignore everything by default
+*
+
+# Whitelist only these files
+!.gitignore
+!README.md
+!LICENSE
+!Step_1 Export_Results.py
+!Step_2 Process Output File.py
+!Step_3 Generate Reports.py
